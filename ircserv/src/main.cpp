@@ -6,11 +6,12 @@
 /*   By: miaviles <miaviles@student.42madrid>       +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/12/03 15:52:03 by miaviles          #+#    #+#             */
-/*   Updated: 2025/12/03 16:05:26 by miaviles         ###   ########.fr       */
+/*   Updated: 2025/12/03 17:15:03 by miaviles         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
 #include "Server.hpp"
+#include <iostream>
 
 int main(int argc, char **argv)
 {
@@ -25,5 +26,12 @@ int main(int argc, char **argv)
 	port = atoi(argv[1]);
 	pass = argv[2];
 
+	Server server(port, pass);
+	if (!server.start())
+	{
+		std::cerr << "Failed to start server\n";
+		return (1);
+	}
+	server.run(); //* MAIN LOOP
 	return (0);
 }
