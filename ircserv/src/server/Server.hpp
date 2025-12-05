@@ -6,7 +6,7 @@
 /*   By: miaviles <miaviles@student.42madrid>       +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/12/03 15:55:08 by miaviles          #+#    #+#             */
-/*   Updated: 2025/12/03 18:07:44 by miaviles         ###   ########.fr       */
+/*   Updated: 2025/12/05 16:17:00 by miaviles         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -20,48 +20,67 @@
 class ClientConnection;
 class Channel;
 
+/**
+ * Server: IRC Server main coordinator
+ * 
+ * Responsibilities:
+ * - Main poll() loop (SINGLE poll as required by 42)
+ * - ClientConnection lifecycle management
+ * - Event routing to appropriate handlers
+ * - Channel management
+ * - Command execution coordination
+ * 
+ * Uses:
+ * - SocketUtils for low-level socket operations
+ * - ClientConnection for connection + User state
+ */
+
 class Server {
 	public:
 		Server(int port, const std::string& password);
 		~Server();
 
-		//* NOT ALLOWED COPIES
-		Server(const Server&);
-    	Server& operator=(const Server&);
-
-		bool start(); //* Create Socket, bind, listen
-		void run(); //* Loop poll()/select()
-
+		//* MAIN CONTROLLERS
+		bool start(); 								//* Create Socket, bind, listen
+		void run(); 								//* Loop poll()/select()
+		void stop();
 	
-		const std::string& getPassword() const { return password_; } //* GETTER
-
+		//* GETTERS
+		const std::string& getPassword() const;
+		int getClientCount() const;
+		
 	private:
 		//* CONFIGURATION
 		int port_;
 		std::string password_;
-		int server_fd_; //* FD OF THE SERVER'S SOCKET
+		int server_fd_; 							//* FD OF THE SERVER'S SOCKET
+		bool running_;
 
 		//* COLLECTIONS
-		std::vector<ClientConnection*> clients_; //* STORAGE THE LIST OF CLIENTS
-		std::vector<Channel*> channels_; //* STORAGE THE LIST OF CHANNELS
-		std::vector<struct pollfd> poll_fds_; //* POOLS FUCTION
+		std::vector<ClientConnection*> clients_; 	//* STORAGE THE LIST OF CLIENTS
+		std::vector<Channel*> channels_; 			//* STORAGE THE LIST OF CHANNELS
+		std::vector<struct pollfd> poll_fds_; 		//* POOLS FUCTION
 
-		//* PRIVATE METHODS
 		//* INITIALIZATION
-		bool createSocket();
-		bool bindSocket();
-		bool listenSocket();
-		bool setNonBlocking(int fd);
+		bool setupServerSocket();
 
 		//* CONECTION MANAGEMENT
 		void acceptNewConnections();
-		void handleClientData(int client_index);
-		void disconnectClient(int client_index);
+    	void handleClientEvent(size_t poll_index);
+   		void disconnectClient(size_t poll_index);
 
-		//* UTILS
-		void updatePollFds();
+		//* COMMAND PROCESSING (for later)
+		void processClientCommands(ClientConnection* client);
+		void sendPendingData(ClientConnection* client);
+		
+		//* UTILITIES
+		void addClientToPoll(ClientConnection* client);
+		void updatePollEvents(int fd, short events);
 		ClientConnection* findClientByFd(int fd);
-};
 
+		//* NON-COPYABLE
+		Server(const Server&);
+    	Server& operator=(const Server&);
+};
 
 #endif
