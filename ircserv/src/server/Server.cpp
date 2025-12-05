@@ -11,10 +11,10 @@
 /* ************************************************************************** */
 
 #include "Server.hpp"
-#include "ClientConnection.hpp"
-#include "User.hpp"
-#include "Channel.hpp"
-#include "SocketUtils.hpp"
+#include "../client/ClientConnection.hpp"
+#include "../client/User.hpp"
+#include "../channel/Channel.hpp"
+#include "../net/SocketUtils.hpp"
 
 #include <unistd.h>
 #include <cerrno>
