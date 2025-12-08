@@ -6,7 +6,7 @@
 /*   By: miaviles <miaviles@student.42madrid>       +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/12/03 17:15:15 by miaviles          #+#    #+#             */
-/*   Updated: 2025/12/05 18:24:56 by miaviles         ###   ########.fr       */
+/*   Updated: 2025/12/08 17:09:09 by miaviles         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -182,7 +182,10 @@ void Server::disconnectClient(size_t poll_index)
 
 void Server::processClientCommands(ClientConnection* client)
 {
-
+	//TODO
+	//-C- Process complete IRC command lines from client
+	//-C-RESPONSIBILITIES (Parser/Commands team):
+ 	//TODO: Parser/Commands team - implement full IRC command processing
 }
 
 void Server::sendPendingData(ClientConnection* client)

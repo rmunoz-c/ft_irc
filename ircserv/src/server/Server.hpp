@@ -6,7 +6,7 @@
 /*   By: miaviles <miaviles@student.42madrid>       +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/12/03 15:55:08 by miaviles          #+#    #+#             */
-/*   Updated: 2025/12/05 16:17:00 by miaviles         ###   ########.fr       */
+/*   Updated: 2025/12/08 16:51:52 by miaviles         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -80,7 +80,7 @@ class Server {
 
 		//* NON-COPYABLE
 		Server(const Server&);
-    	Server& operator=(const Server&);
+		Server& operator=(const Server&);
 };
 
 #endif
