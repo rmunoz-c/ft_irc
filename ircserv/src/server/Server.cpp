@@ -6,7 +6,7 @@
 /*   By: miaviles <miaviles@student.42madrid>       +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/12/03 17:15:15 by miaviles          #+#    #+#             */
-/*   Updated: 2025/12/09 14:40:11 by miaviles         ###   ########.fr       */
+/*   Updated: 2025/12/09 14:47:32 by miaviles         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -44,8 +44,13 @@ Server::~Server()
 	{
 		if (clients_[i])
 		{
+			User* user = clients_[i]->getUser();		//* Get associated User before deleting connection
+
 			close(clients_[i]->getFd());
-			delete clients_[i]; 			//* ALSO DELETES THEE USER INSIDE 
+			delete clients_[i];							//* Delete ClientConnection
+			
+			if (user)								    //* Delete User if exists
+				delete user;
 		}
 	}
 
