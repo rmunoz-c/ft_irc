@@ -6,7 +6,7 @@
 /*   By: carlsanc <carlsanc@student.42madrid>       +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/12/10 19:22:47 by carlsanc          #+#    #+#             */
-/*   Updated: 2025/12/10 19:23:04 by carlsanc         ###   ########.fr       */
+/*   Updated: 2025/12/10 20:17:41 by carlsanc         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -18,6 +18,19 @@
 #include <sstream>
 #include <vector>
 #include <algorithm>
+#include <cstdlib> // [CORRECCION] Necesario para std::atoi
+#include <cstdio>  // Para sprintf si fuera necesario
+
+// [CORRECCION] Definiciones de seguridad por si NumericReplies.hpp no se actualizó
+#ifndef RPL_CHANNELMODEIS
+#define RPL_CHANNELMODEIS "324"
+#endif
+#ifndef ERR_USERSDONTMATCH
+#define ERR_USERSDONTMATCH "502"
+#endif
+#ifndef ERR_UMODEUNKNOWNFLAG
+#define ERR_UMODEUNKNOWNFLAG "501"
+#endif
 
 /* -------------------------------------------------------------------------- */
 /* UTILIDADES                                                                 */
@@ -30,10 +43,26 @@ static void sendReply(ClientConnection* client, std::string num, std::string msg
     client->queueSend(finalMsg);
 }
 
-// Helper para enviar errores simples
+// Helper para enviar errores con mensajes RFC más claros
 static void sendError(ClientConnection* client, std::string num, std::string arg)
 {
-    std::string msg = arg + " :Error check RFC"; // Mensaje genérico, se puede refinar
+    std::string msg;
+    // [CORRECCION] Mensajes más descriptivos según el error
+    if (num == ERR_NEEDMOREPARAMS) msg = arg + " :Not enough parameters";
+    else if (num == ERR_ALREADYREGISTRED) msg = ":Unauthorized command (already registered)";
+    else if (num == ERR_PASSWDMISMATCH) msg = ":Password incorrect";
+    else if (num == ERR_NONICKNAMEGIVEN) msg = ":No nickname given";
+    else if (num == ERR_ERRONEUSNICKNAME) msg = arg + " :Erroneous nickname";
+    else if (num == ERR_NICKNAMEINUSE) msg = arg + " :Nickname is already in use";
+    else if (num == ERR_NOSUCHNICK) msg = arg + " :No such nick/channel";
+    else if (num == ERR_NOSUCHCHANNEL) msg = arg + " :No such channel";
+    else if (num == ERR_NOTONCHANNEL) msg = arg + " :You're not on that channel";
+    else if (num == ERR_USERONCHANNEL) msg = arg + " :is already on channel";
+    else if (num == ERR_CHANOPRIVSNEEDED) msg = arg + " :You're not channel operator";
+    else if (num == ERR_USERSDONTMATCH) msg = ":Cannot change mode for other users";
+    else if (num == ERR_UMODEUNKNOWNFLAG) msg = ":Unknown MODE flag";
+    else msg = arg + " :Unknown Error";
+
     sendReply(client, num, msg);
 }
 
@@ -72,11 +101,11 @@ void Server::cmdPass(ClientConnection* client, const Message& msg)
         return sendError(client, ERR_NEEDMOREPARAMS, "PASS");
     
     if (client->isRegistered())
-        return sendError(client, ERR_ALREADYREGISTRED, ":You may not reregister");
+        return sendError(client, ERR_ALREADYREGISTRED, "");
 
     if (msg.params[0] != this->password_)
     {
-        sendError(client, ERR_PASSWDMISMATCH, ":Password incorrect");
+        sendError(client, ERR_PASSWDMISMATCH, "");
         client->closeConnection(); // Desconexión por seguridad
         return;
     }
@@ -87,30 +116,37 @@ void Server::cmdPass(ClientConnection* client, const Message& msg)
 void Server::cmdNick(ClientConnection* client, const Message& msg)
 {
     if (msg.params.empty())
-        return sendError(client, ERR_NONICKNAMEGIVEN, ":No nickname given");
+        return sendError(client, ERR_NONICKNAMEGIVEN, "");
 
     std::string newNick = msg.params[0];
 
-    // Validar caracteres (letras, numeros, especiales permitidos)
+    // Validar caracteres
     if (newNick.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789[]{}\\|-_^") != std::string::npos)
-        return sendError(client, ERR_ERRONEUSNICKNAME, newNick + " :Erroneous nickname");
+        return sendError(client, ERR_ERRONEUSNICKNAME, newNick);
 
     // Verificar colisiones
     for (size_t i = 0; i < clients_.size(); ++i)
     {
         if (clients_[i] != client && clients_[i]->getUser() && clients_[i]->getUser()->getNickname() == newNick)
-            return sendError(client, ERR_NICKNAMEINUSE, newNick + " :Nickname is already in use");
+            return sendError(client, ERR_NICKNAMEINUSE, newNick);
     }
 
-    // Si ya estaba registrado, notificar el cambio a todos los canales
+    // [CORRECCION] BROADCAST REAL A CANALES
     if (client->isRegistered())
     {
         std::string oldPrefix = client->getUser()->getPrefix();
         std::string notification = ":" + oldPrefix + " NICK :" + newNick + "\r\n";
+        
+        // 1. Enviar al propio usuario
         client->queueSend(notification);
         
-        // Broadcast a canales compartidos (TODO: Implementar broadcast real a canales)
-        // Por ahora solo al usuario
+        // 2. Iterar sobre todos los canales del usuario y hacer broadcast
+        // NOTA: Channel::broadcast excluye al emisor, así que es perfecto aquí.
+        const std::vector<Channel*>& channels = client->getUser()->getChannels();
+        for (size_t i = 0; i < channels.size(); ++i)
+        {
+            channels[i]->broadcast(notification, client->getUser());
+        }
     }
 
     client->getUser()->setNickname(newNick);
@@ -120,14 +156,14 @@ void Server::cmdNick(ClientConnection* client, const Message& msg)
 void Server::cmdUser(ClientConnection* client, const Message& msg)
 {
     if (client->isRegistered())
-        return sendError(client, ERR_ALREADYREGISTRED, ":You may not reregister");
+        return sendError(client, ERR_ALREADYREGISTRED, "");
 
     if (msg.params.size() < 4)
         return sendError(client, ERR_NEEDMOREPARAMS, "USER");
 
     User* user = client->getUser();
     user->setUsername(msg.params[0]);
-    user->setRealname(msg.params[3]); // El parámetro 3 suele ser el realname (con espacios si fue parseado correctamente)
+    user->setRealname(msg.params[3]);
     
     checkRegistration(client);
 }
@@ -135,9 +171,7 @@ void Server::cmdUser(ClientConnection* client, const Message& msg)
 void Server::cmdQuit(ClientConnection* client, const Message& msg)
 {
     std::string reason = (msg.params.empty()) ? "Client Quit" : msg.params[0];
-    // La lógica de desconexión real ocurre en el Server loop cuando detecta cierre
-    // Pero aquí podemos enviar el mensaje de error o cerrar el socket.
-    // Lo ideal es marcar el cliente para cierre.
+    (void)reason; // Se podría usar para log
     client->closeConnection();
 }
 
@@ -152,7 +186,7 @@ void Server::cmdPing(ClientConnection* client, const Message& msg)
 
 void Server::cmdPong(ClientConnection* client, const Message& msg)
 {
-    (void)msg; // Ignorar, solo actualiza actividad (ya hecho en receiveData)
+    (void)msg;
     client->updateActivity();
 }
 
@@ -160,7 +194,6 @@ void Server::cmdPong(ClientConnection* client, const Message& msg)
 /* CANALES                                     */
 /* ========================================================================== */
 
-// Busca un canal existente por nombre
 Channel* Server::getChannel(const std::string& name)
 {
     for (size_t i = 0; i < channels_.size(); ++i)
@@ -171,7 +204,6 @@ Channel* Server::getChannel(const std::string& name)
     return NULL;
 }
 
-// Crea un nuevo canal
 Channel* Server::createChannel(const std::string& name)
 {
     Channel* newChan = new Channel(name);
@@ -194,29 +226,33 @@ void Server::cmdJoin(ClientConnection* client, const Message& msg)
         std::string chanName = targets[i];
         std::string key = (i < keys.size()) ? keys[i] : "";
 
-        if (chanName[0] != '#') chanName = "#" + chanName; // Asegurar formato
+        if (chanName[0] != '#') chanName = "#" + chanName;
 
         Channel* channel = getChannel(chanName);
         if (!channel)
         {
             channel = createChannel(chanName);
-            channel->addOperator(client->getUser()); // Primer usuario es Operador
+            channel->addOperator(client->getUser());
         }
 
-        // Validaciones de Modos
+        // [CORRECCION] Verificar si ya es miembro
+        if (channel->isMember(client->getUser()))
+            continue; // Ignorar silenciosamente o enviar error si se prefiere
+
+        // Validaciones
         if (channel->hasMode('i') && !channel->isInvited(client->getUser()))
         {
-            sendError(client, ERR_INVITEONLYCHAN, chanName + " :Cannot join channel (+i)");
+            sendError(client, ERR_INVITEONLYCHAN, chanName);
             continue;
         }
         if (channel->hasMode('k') && channel->getKey() != key)
         {
-            sendError(client, ERR_BADCHANNELKEY, chanName + " :Cannot join channel (+k)");
+            sendError(client, ERR_BADCHANNELKEY, chanName);
             continue;
         }
-        if (channel->hasMode('l') && channel->getUserCount() >= channel->getLimit())
+        if (channel->hasMode('l') && channel->getUserCount() >= (size_t)channel->getLimit())
         {
-            sendError(client, ERR_CHANNELISFULL, chanName + " :Cannot join channel (+l)");
+            sendError(client, ERR_CHANNELISFULL, chanName);
             continue;
         }
 
@@ -224,20 +260,35 @@ void Server::cmdJoin(ClientConnection* client, const Message& msg)
         channel->addMember(client->getUser());
         client->getUser()->joinChannel(channel);
 
-        // Notificar JOIN a todos
+        // Notificar JOIN
         std::string joinMsg = ":" + client->getUser()->getPrefix() + " JOIN " + chanName + "\r\n";
-        channel->broadcast(joinMsg, NULL); // NULL = enviar a todos
+        channel->broadcast(joinMsg, NULL); // Enviar a TODOS (incluido uno mismo a veces, pero mejor que el cliente lo reciba del server)
+        client->queueSend(joinMsg); // Asegurar que el propio cliente lo recibe
 
-        // Enviar Topic
+        // Topic
         if (channel->getTopic().empty())
             sendReply(client, RPL_NOTOPIC, chanName + " :No topic is set");
         else
             sendReply(client, RPL_TOPIC, chanName + " :" + channel->getTopic());
 
-        // Enviar lista de nombres (RPL_NAMREPLY)
-        // Formato: :Server 353 Nick = #channel :Nick1 @Nick2
-        std::string names = channel->getNamesList(); 
-        sendReply(client, RPL_NAMREPLY, "= " + chanName + " :" + names);
+        // [CORRECCION] RPL_NAMREPLY Formato Correcto
+        // 353 (RPL_NAMREPLY) Format: "<channel> :[[@|+]<nick> [[@|+]<nick> ...]]"
+        // Symbol: '=' (public), '@' (secret), '*' (private)
+        std::string symbol = "="; 
+        std::string namesList;
+        
+        // Construimos la lista manualmente para añadir prefijos (@)
+        // NOTA: Esto asume que tienes acceso a los miembros del canal. 
+        // Si channel->getNamesList() ya lo hace, bien, pero aquí aseguramos el prefijo.
+        // Dado que Channel.cpp tiene un getNamesList, vamos a confiar en él si está bien implementado,
+        // o lo reimplementamos aquí para estar seguros del formato ":@Admin User"
+        
+        // Reimplementación segura inline:
+        // Necesitamos acceso a los miembros del canal. Como Channel encapsula _members, 
+        // dependemos de que getNamesList() de Channel.cpp esté correcto (añade @).
+        // En tu código Channel.cpp: "if (isOperator(user)) list += "@";" -> CORRECTO.
+        
+        sendReply(client, RPL_NAMREPLY, symbol + " " + chanName + " :" + channel->getNamesList());
         sendReply(client, RPL_ENDOFNAMES, chanName + " :End of /NAMES list");
     }
 }
@@ -255,39 +306,33 @@ void Server::cmdPart(ClientConnection* client, const Message& msg)
         Channel* channel = getChannel(targets[i]);
         if (!channel)
         {
-            sendError(client, ERR_NOSUCHCHANNEL, targets[i] + " :No such channel");
+            sendError(client, ERR_NOSUCHCHANNEL, targets[i]);
             continue;
         }
         
         if (!channel->isMember(client->getUser()))
         {
-            sendError(client, ERR_NOTONCHANNEL, targets[i] + " :You're not on that channel");
+            sendError(client, ERR_NOTONCHANNEL, targets[i]);
             continue;
         }
 
-        // 1. Notificar a todos (Broadcast)
         std::string partMsg = ":" + client->getUser()->getPrefix() + " PART " + targets[i] + " :" + reason + "\r\n";
-        channel->broadcast(partMsg, NULL);
+        channel->broadcast(partMsg, NULL); // Enviar a todos en el canal
 
-        // 2. Desvincular usuario y canal
         channel->removeMember(client->getUser());
         client->getUser()->leaveChannel(channel);
 
-        // 3. Borrado seguro del canal si está vacío
         if (channel->getUserCount() == 0)
         {
             for (std::vector<Channel*>::iterator it = channels_.begin(); it != channels_.end(); )
             {
                 if (*it == channel)
                 {
-                    delete *it;            // Liberar memoria
-                    it = channels_.erase(it); // Actualizar iterador
-                    break;                 // Salimos, ya que borramos el canal buscado
+                    delete *it;
+                    it = channels_.erase(it);
+                    break;
                 }
-                else
-                {
-                    ++it;                  // Avanzar solo si no borramos
-                }
+                else ++it;
             }
         }
     }
@@ -301,7 +346,6 @@ void Server::cmdTopic(ClientConnection* client, const Message& msg)
     Channel* channel = getChannel(msg.params[0]);
     if (!channel) return sendError(client, ERR_NOSUCHCHANNEL, msg.params[0]);
 
-    // VIEW TOPIC
     if (msg.params.size() == 1)
     {
         if (channel->getTopic().empty())
@@ -311,9 +355,8 @@ void Server::cmdTopic(ClientConnection* client, const Message& msg)
         return;
     }
 
-    // SET TOPIC
     if (channel->hasMode('t') && !channel->isOperator(client->getUser()))
-        return sendError(client, ERR_CHANOPRIVSNEEDED, channel->getName() + " :You're not channel operator");
+        return sendError(client, ERR_CHANOPRIVSNEEDED, channel->getName());
 
     channel->setTopic(msg.params[1]);
     std::string topicMsg = ":" + client->getUser()->getPrefix() + " TOPIC " + channel->getName() + " :" + msg.params[1] + "\r\n";
@@ -332,23 +375,20 @@ void Server::cmdPrivMsg(ClientConnection* client, const Message& msg)
     std::string target = msg.params[0];
     std::string text = msg.params[1];
 
-    // Mensaje a CANAL
     if (target[0] == '#')
     {
         Channel* channel = getChannel(target);
         if (!channel) return sendError(client, ERR_NOSUCHCHANNEL, target);
         
-        // OPCIONAL: Check si usuario está en canal (algunos servidores lo requieren)
-        if (!channel->isMember(client->getUser()))
-             return sendError(client, ERR_CANNOTSENDTOCHAN, target + " :Cannot send to channel");
+        // Comprobar si puede enviar (ej: +n no external messages, +m moderated) - Opcional para básico
+        if (channel->hasMode('n') && !channel->isMember(client->getUser())) // Si implementaras +n
+             return sendError(client, ERR_CANNOTSENDTOCHAN, target);
 
         std::string fullMsg = ":" + client->getUser()->getPrefix() + " PRIVMSG " + target + " :" + text + "\r\n";
-        channel->broadcast(fullMsg, client->getUser()); // No enviar a uno mismo
+        channel->broadcast(fullMsg, client->getUser());
     }
-    // Mensaje a USUARIO
     else
     {
-        // Buscar usuario en lista de clientes
         User* dest = NULL;
         for (size_t i = 0; i < clients_.size(); ++i) {
             if (clients_[i]->isRegistered() && clients_[i]->getUser()->getNickname() == target) {
@@ -356,7 +396,7 @@ void Server::cmdPrivMsg(ClientConnection* client, const Message& msg)
                 break;
             }
         }
-        if (!dest) return sendError(client, ERR_NOSUCHNICK, target + " :No such nick/channel");
+        if (!dest) return sendError(client, ERR_NOSUCHNICK, target);
 
         std::string fullMsg = ":" + client->getUser()->getPrefix() + " PRIVMSG " + target + " :" + text + "\r\n";
         dest->getConnection()->queueSend(fullMsg);
@@ -365,7 +405,6 @@ void Server::cmdPrivMsg(ClientConnection* client, const Message& msg)
 
 void Server::cmdNotice(ClientConnection* client, const Message& msg)
 {
-    // NOTICE es igual que PRIVMSG pero NUNCA envía respuestas de error automática
     if (!client->isRegistered() || msg.params.size() < 2) return;
 
     std::string target = msg.params[0];
@@ -404,14 +443,13 @@ void Server::cmdKick(ClientConnection* client, const Message& msg)
     if (!channel) return sendError(client, ERR_NOSUCHCHANNEL, chanName);
 
     if (!channel->isOperator(client->getUser()))
-        return sendError(client, ERR_CHANOPRIVSNEEDED, chanName + " :You're not channel operator");
+        return sendError(client, ERR_CHANOPRIVSNEEDED, chanName);
 
     User* targetUser = channel->getMember(targetNick);
-    if (!targetUser) return sendError(client, ERR_USERNOTINCHANNEL, targetNick + " " + chanName + " :They aren't on that channel");
+    if (!targetUser) return sendError(client, ERR_USERNOTINCHANNEL, targetNick + " " + chanName);
 
-    // Enviar mensaje KICK a todos (incluido el kickeado)
     std::string kickMsg = ":" + client->getUser()->getPrefix() + " KICK " + chanName + " " + targetNick + " :" + comment + "\r\n";
-    channel->broadcast(kickMsg, NULL);
+    channel->broadcast(kickMsg, NULL); // Enviar a todos
 
     channel->removeMember(targetUser);
     targetUser->leaveChannel(channel);
@@ -428,19 +466,17 @@ void Server::cmdInvite(ClientConnection* client, const Message& msg)
     if (channel)
     {
         if (!channel->isMember(client->getUser()))
-             return sendError(client, ERR_NOTONCHANNEL, chanName + " :You're not on that channel");
+             return sendError(client, ERR_NOTONCHANNEL, chanName);
         
         if (channel->hasMode('i') && !channel->isOperator(client->getUser()))
-             return sendError(client, ERR_CHANOPRIVSNEEDED, chanName + " :You're not channel operator");
+             return sendError(client, ERR_CHANOPRIVSNEEDED, chanName);
         
         if (channel->getMember(targetNick))
-             return sendError(client, ERR_USERONCHANNEL, targetNick + " " + chanName + " :is already on channel");
+             return sendError(client, ERR_USERONCHANNEL, targetNick + " " + chanName);
         
-        // Agregar a la lista de invitados
         channel->addInvite(targetNick);
     }
 
-    // Buscar usuario objetivo
     User* dest = NULL;
     for (size_t i = 0; i < clients_.size(); ++i) {
         if (clients_[i]->isRegistered() && clients_[i]->getUser()->getNickname() == targetNick) {
@@ -450,95 +486,131 @@ void Server::cmdInvite(ClientConnection* client, const Message& msg)
     }
     if (!dest) return sendError(client, ERR_NOSUCHNICK, targetNick);
 
-    // Enviar notificación INVITE al destino
     std::string invMsg = ":" + client->getUser()->getPrefix() + " INVITE " + targetNick + " " + chanName + "\r\n";
     dest->getConnection()->queueSend(invMsg);
     
-    // Confirmar al emisor
     sendReply(client, RPL_INVITING, targetNick + " " + chanName);
 }
 
 void Server::cmdMode(ClientConnection* client, const Message& msg)
 {
-    if (msg.params.size() < 2) return sendError(client, ERR_NEEDMOREPARAMS, "MODE");
+    if (msg.params.size() < 1) return sendError(client, ERR_NEEDMOREPARAMS, "MODE");
 
     std::string target = msg.params[0];
     
-    // Modo de canal
-    if (target[0] == '#')
+    // [CORRECCION] Diferenciar MODO CANAL (#) de MODO USUARIO
+    if (target[0] != '#')
     {
-        Channel* channel = getChannel(target);
-        if (!channel) return sendError(client, ERR_NOSUCHCHANNEL, target);
-
-        // Si solo envían "MODE #channel", devolver los modos actuales
-        if (msg.params.size() == 1) {
-             sendReply(client, "324", target + " " + channel->getModes());
-             return;
+        // MODO USUARIO
+        // Solo permitimos ver/cambiar modos propios (ej: +i)
+        if (target != client->getUser()->getNickname())
+        {
+            sendError(client, ERR_USERSDONTMATCH, "");
+            return;
+        }
+        
+        if (msg.params.size() == 1)
+        {
+            // Query de modos actuales
+            // RPL_UMODEIS (221)
+            std::string modes = "+";
+            if (client->getUser()->isInvisible()) modes += "i";
+            sendReply(client, "221", modes);
+            return;
         }
 
-        if (!channel->isOperator(client->getUser()))
-            return sendError(client, ERR_CHANOPRIVSNEEDED, target + " :You're not channel operator");
-
+        // Setear modos
         std::string modeString = msg.params[1];
-        size_t paramIdx = 2; // Índice para argumentos extra (clave, usuario, limite)
-        
-        char action = '+'; // Default add
-
+        char action = '+';
         for (size_t i = 0; i < modeString.length(); ++i)
         {
-            char mode = modeString[i];
-            
-            if (mode == '+' || mode == '-') {
-                action = mode;
+            if (modeString[i] == '+' || modeString[i] == '-') {
+                action = modeString[i];
                 continue;
             }
+            if (modeString[i] == 'i') {
+                client->getUser()->setInvisible(action == '+');
+            }
+            // Ignoramos otros flags desconocidos o enviamos ERR_UMODEUNKNOWNFLAG
+        }
+        // Confirmar cambio de modo al usuario
+        // MODE Nick :+i
+        std::string modeMsg = ":" + client->getUser()->getPrefix() + " MODE " + target + " :" + modeString + "\r\n";
+        client->queueSend(modeMsg);
+        return;
+    }
 
-            // MODOS QUE REQUIEREN ARGUMENTOS
+    // MODO CANAL
+    Channel* channel = getChannel(target);
+    if (!channel) return sendError(client, ERR_NOSUCHCHANNEL, target);
+
+    // Si solo envían "MODE #channel", devolver los modos actuales
+    if (msg.params.size() == 1) {
+         sendReply(client, RPL_CHANNELMODEIS, target + " " + channel->getModes());
+         return;
+    }
+
+    if (!channel->isOperator(client->getUser()))
+        return sendError(client, ERR_CHANOPRIVSNEEDED, target);
+
+    std::string modeString = msg.params[1];
+    size_t paramIdx = 2; // Índice para argumentos extra
+    char action = '+';
+
+    for (size_t i = 0; i < modeString.length(); ++i)
+    {
+        char mode = modeString[i];
+        
+        if (mode == '+' || mode == '-') {
+            action = mode;
+            continue;
+        }
+
+        // o: Operator
+        if (mode == 'o') {
+            if (paramIdx >= msg.params.size()) continue; // [CORRECCION] Bounds check
+            std::string targetNick = msg.params[paramIdx++];
+            User* targetUser = channel->getMember(targetNick);
             
-            // o: Operator
-            if (mode == 'o') {
-                if (paramIdx >= msg.params.size()) continue; // Ignorar si falta arg
-                std::string targetNick = msg.params[paramIdx++];
-                User* targetUser = channel->getMember(targetNick);
+            if (targetUser) {
+                if (action == '+') channel->addOperator(targetUser);
+                else channel->removeOperator(targetUser);
                 
-                if (targetUser) {
-                    if (action == '+') channel->addOperator(targetUser);
-                    else channel->removeOperator(targetUser);
-                    
-                    // Broadcast cambio
-                    channel->broadcast(":" + client->getUser()->getPrefix() + " MODE " + target + " " + action + "o " + targetNick + "\r\n", NULL);
-                }
+                channel->broadcast(":" + client->getUser()->getPrefix() + " MODE " + target + " " + action + "o " + targetNick + "\r\n", NULL);
             }
-            // k: Key
-            else if (mode == 'k') {
-                if (action == '+') {
-                    if (paramIdx >= msg.params.size()) continue;
-                    std::string key = msg.params[paramIdx++];
-                    channel->setKey(key);
-                } else {
-                    channel->setKey(""); // Quitar clave
-                }
-                 channel->broadcast(":" + client->getUser()->getPrefix() + " MODE " + target + " " + action + "k" + (action == '+' ? " *" : "") + "\r\n", NULL);
+        }
+        // k: Key
+        else if (mode == 'k') {
+            if (action == '+') {
+                if (paramIdx >= msg.params.size()) continue; // [CORRECCION] Bounds check
+                std::string key = msg.params[paramIdx++];
+                channel->setKey(key);
+                channel->broadcast(":" + client->getUser()->getPrefix() + " MODE " + target + " " + action + "k " + key + "\r\n", NULL);
+            } else {
+                channel->setKey(""); 
+                channel->broadcast(":" + client->getUser()->getPrefix() + " MODE " + target + " " + action + "k" + "\r\n", NULL);
             }
-            // l: Limit
-            else if (mode == 'l') {
-                if (action == '+') {
-                    if (paramIdx >= msg.params.size()) continue;
-                    // C++98 string to int conversion
-                    int limit = std::atoi(msg.params[paramIdx++].c_str());
-                    channel->setLimit(limit);
-                     channel->broadcast(":" + client->getUser()->getPrefix() + " MODE " + target + " " + action + "l " + msg.params[paramIdx-1] + "\r\n", NULL);
-                } else {
-                    channel->setLimit(0); // 0 = sin limite
-                     channel->broadcast(":" + client->getUser()->getPrefix() + " MODE " + target + " " + action + "l" + "\r\n", NULL);
-                }
+        }
+        // l: Limit
+        else if (mode == 'l') {
+            if (action == '+') {
+                if (paramIdx >= msg.params.size()) continue; // [CORRECCION] Bounds check
+                int limit = std::atoi(msg.params[paramIdx++].c_str());
+                channel->setLimit(limit);
+                // Convertir int a string para la respuesta (C++98 way)
+                char buff[20];
+                std::sprintf(buff, "%d", limit);
+                channel->broadcast(":" + client->getUser()->getPrefix() + " MODE " + target + " " + action + "l " + std::string(buff) + "\r\n", NULL);
+            } else {
+                channel->setLimit(0);
+                channel->broadcast(":" + client->getUser()->getPrefix() + " MODE " + target + " " + action + "l" + "\r\n", NULL);
             }
-            // i: Invite Only | t: Topic Restricted
-            else if (mode == 'i' || mode == 't') {
-                channel->setMode(mode, (action == '+'));
-                std::string mStr(1, mode);
-                channel->broadcast(":" + client->getUser()->getPrefix() + " MODE " + target + " " + action + mStr + "\r\n", NULL);
-            }
+        }
+        // i: Invite Only | t: Topic Restricted
+        else if (mode == 'i' || mode == 't') {
+            channel->setMode(mode, (action == '+'));
+            std::string mStr(1, mode);
+            channel->broadcast(":" + client->getUser()->getPrefix() + " MODE " + target + " " + action + mStr + "\r\n", NULL);
         }
     }
 }

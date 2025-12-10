@@ -6,7 +6,7 @@
 /*   By: carlsanc <carlsanc@student.42madrid>       +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/12/03 17:15:15 by miaviles          #+#    #+#             */
-/*   Updated: 2025/12/10 19:19:57 by carlsanc         ###   ########.fr       */
+/*   Updated: 2025/12/10 19:49:17 by carlsanc         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -138,24 +138,32 @@ void Server::run()
 		}
 		
 		//* CHECK EACH SOCKET for activity
-		for (size_t i = 0; i < poll_fds_.size(); ++i)
-		{
-			//* SKIP if no events on this socket
-			if (poll_fds_[i].revents == 0)
-				continue;
-			
-			//* CASE 1: Activity on SERVER SOCKET (new connection incoming)
-			if (poll_fds_[i].fd == server_fd_)
-			{
-				if (poll_fds_[i].revents & POLLIN)    //* Data ready to read = new client waiting
-					acceptNewConnections();            //* Accept the new client
-			}
-			//* CASE 2: Activity on CLIENT SOCKET (existing client sent data)
-			else
-				handleClientEvent(i);                  //* Process client's message/task
-		}
-	}
-	std::cout << "[SERVER] Main loop ended" << std::endl;
+		// No incrementamos 'i' automáticamente en el for loop.
+        // Solo incrementamos si NO borramos el cliente actual.
+        // Si borramos (handleClientEvent devuelve false), el vector se desplaza
+        // y el siguiente elemento ocupa la posición actual 'i'.
+		for (size_t i = 0; i < poll_fds_.size(); /* vacío */)
+        {
+            // Caso 1: Server Socket (Nuevas conexiones)
+            if (poll_fds_[i].fd == server_fd_)
+            {
+                if (poll_fds_[i].revents & POLLIN)
+                    acceptNewConnections();
+                i++; // El server socket nunca se borra aquí
+            }
+            // Caso 2: Client Socket
+            else
+            {
+                // Si retorna false, el cliente fue borrado y 'poll_fds_' se redujo.
+                // No incrementamos 'i' porque el siguiente cliente ahora está en 'i'.
+                if (!handleClientEvent(i))
+                    continue; 
+                
+                i++; // Cliente sigue vivo, pasamos al siguiente
+            }
+        }
+    }
+    std::cout << "[SERVER] Main loop ended" << std::endl;
 }
 
 //* ============================================================================
@@ -225,68 +233,90 @@ void Server::acceptNewConnections()
 //* 3. Socket ready for writing (POLLOUT)
 //* Manages the complete client I/O lifecycle: receive -> buffer -> parse -> respond
 
-void Server::handleClientEvent(size_t poll_index)
+bool Server::handleClientEvent(size_t poll_index)
 {
-	int client_fd = poll_fds_[poll_index].fd;              //* Extract file descriptor from poll array
-	short revents = poll_fds_[poll_index].revents;         //* Extract returned events (what actually happened on this socket)
+    int fd = poll_fds_[poll_index].fd;
+    short revents = poll_fds_[poll_index].revents;
+    ClientConnection* client = findClientByFd(fd);
 
-	//* FIND CLIENT OBJECT associated with this file descriptor
-	ClientConnection* client = findClientByFd(client_fd);
-	if (!client)
-	{
-		std::cerr << "[ERROR] Client not found for fd=" << client_fd << std::endl;
-		return;                                             //* Orphaned socket - should never happen but handle gracefully
-	}
+    // Seguridad: Si no encontramos el objeto cliente pero está en poll, lo sacamos
+    if (!client)
+    {
+        // Eliminar directamente del poll para evitar bucles infinitos
+        poll_fds_.erase(poll_fds_.begin() + poll_index);
+        close(fd);
+        return false; // Cliente eliminado
+    }
 
-	//* CHECK FOR SOCKET ERRORS OR DISCONNECTION
-	//* POLLERR  = Error condition (socket error, network issue)
-	//* POLLHUP  = Hang up (client closed their end of connection)
-	//* POLLNVAL = Invalid request (fd not open - rare but possible)
-	if (revents & (POLLERR | POLLHUP | POLLNVAL))
-	{
-		std::cout << "[SERVER] Client fd=" << client_fd << " disconnected (error/hangup)" << std::endl;
-		disconnectClient(poll_index);                       //* Clean up and remove client
-		return;
-	}
+    // 1. GESTIÓN DE ERRORES DE POLL
+    if (revents & (POLLERR | POLLHUP | POLLNVAL))
+    {
+        std::cout << "[SERVER] Client fd=" << fd << " disconnected (POLLHUP/ERR)" << std::endl;
+        disconnectClient(poll_index);
+        return false; // Cliente eliminado
+    }
 
-	//* HANDLE INCOMING DATA (client sent something)
-	if (revents & POLLIN)
-	{
-		char buffer[4096];                                  //* Temporary buffer for received data (4KB is standard for IRC)
-		ssize_t bytes = SocketUtils::receiveData(client_fd, buffer, sizeof(buffer) - 1); //* Read from socket (-1 leaves room for null terminator)
+    // 2. LECTURA (POLLIN)
+    if (revents & POLLIN)
+    {
+        char buffer[4096];
+        ssize_t bytes = recv(fd, buffer, sizeof(buffer) - 1, 0); // No usamos SocketUtils para simplificar lógica aquí o úsalo si prefieres
 
-		//* CASE 1: Data received successfully
-		if (bytes > 0)
-		{
-			buffer[bytes] = '\0';                           //* Null-terminate the received data for string safety
-			client->appendRecvData(std::string(buffer, bytes)); //* Add received data to client's receive buffer
-			client->updateActivity();                       //* Update last activity timestamp (for timeout tracking)
-			
-			std::cout << "[SERVER] Received " << bytes << " bytes from fd=" << client_fd << std::endl;
-			
-			processClientCommands(client);                  //* Parse and execute any complete IRC commands in buffer
-		}
-		//* CASE 2: Connection closed gracefully by peer
-		else if (bytes == 0)
-		{
-			std::cout << "[SERVER] Client fd=" << client_fd << " closed connection" << std::endl;
-			disconnectClient(poll_index);                   //* Clean up - client disconnected normally
-			return;
-		}
-		//* CASE 3: Error occurred during receive
-		else
-		{
-			if (!SocketUtils::isWouldBlock())               //* EWOULDBLOCK/EAGAIN is normal for non-blocking sockets
-				disconnectClient(poll_index);               //* Real error - disconnect client
-		}
-	}
-	
-	//* HANDLE OUTGOING DATA (socket ready to send)
-	//* POLLOUT event means kernel's send buffer has space available
-	if (revents & POLLOUT)
-	{
-		sendPendingData(client);                            //* Flush any queued outgoing messages to this client
-	}
+        if (bytes > 0)
+        {
+            buffer[bytes] = '\0';
+            client->appendRecvData(std::string(buffer, bytes));
+            client->updateActivity();
+            processClientCommands(client);
+            
+            // [CORRECCION ZOMBIE] 
+            // Verificamos si un comando (ej: QUIT) marcó la conexión para cierre
+            if (client->isClosed())
+            {
+                disconnectClient(poll_index);
+                return false; // Cliente eliminado
+            }
+        }
+        else if (bytes == 0) // Conexión cerrada por el par
+        {
+            std::cout << "[SERVER] Client fd=" << fd << " closed connection gracefully" << std::endl;
+            disconnectClient(poll_index);
+            return false; // Cliente eliminado
+        }
+        else // Error en recv
+        {
+            if (errno != EAGAIN && errno != EWOULDBLOCK)
+            {
+                std::cerr << "[SERVER] recv() error on fd=" << fd << ": " << strerror(errno) << std::endl;
+                disconnectClient(poll_index);
+                return false; // Cliente eliminado
+            }
+        }
+    }
+
+    // 3. ESCRITURA (POLLOUT)
+    // Solo intentamos escribir si el socket está listo Y hay datos pendientes
+    if ((revents & POLLOUT) && client->hasPendingSend())
+    {
+        sendPendingData(client);
+        
+        // Verificar de nuevo si hubo error fatal durante el envío
+        if (client->isClosed())
+        {
+            disconnectClient(poll_index);
+            return false;
+        }
+    }
+
+    // [ACTUALIZAR POLL EVENTS]
+    // Si el cliente sigue vivo, actualizamos qué eventos nos interesan.
+    // Siempre POLLIN. Solo POLLOUT si hay datos en el buffer de salida.
+    if (client->hasPendingSend())
+        poll_fds_[poll_index].events = POLLIN | POLLOUT;
+    else
+        poll_fds_[poll_index].events = POLLIN;
+
+    return true; // Cliente sigue vivo
 }
 
 //* ============================================================================

@@ -6,7 +6,7 @@
 /*   By: carlsanc <carlsanc@student.42madrid>       +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/12/03 15:55:08 by miaviles          #+#    #+#             */
-/*   Updated: 2025/12/10 19:14:16 by carlsanc         ###   ########.fr       */
+/*   Updated: 2025/12/10 19:46:01 by carlsanc         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -66,7 +66,7 @@ class Server {
 
 		//* CONECTION MANAGEMENT
 		void acceptNewConnections();
-    	void handleClientEvent(size_t poll_index);
+    	bool handleClientEvent(size_t poll_index);
    		void disconnectClient(size_t poll_index);
 
 		//* COMMAND PROCESSING (for later)
