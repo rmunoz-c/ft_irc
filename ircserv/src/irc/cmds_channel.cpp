@@ -101,7 +101,6 @@ void Server::cmdJoin(ClientConnection* client, const Message& msg)
             sendReply(client, RPL_TOPIC, chanName + " :" + channel->getTopic());
 
         // Enviar lista de Nombres (RPL_NAMREPLY)
-        // IMPORTANTE: Asegúrate de que channel->getNamesList() añade '@' a los operadores
         std::string symbol = "="; // Canal público
         sendReply(client, RPL_NAMREPLY, symbol + " " + chanName + " :" + channel->getNamesList());
         sendReply(client, RPL_ENDOFNAMES, chanName + " :End of /NAMES list");

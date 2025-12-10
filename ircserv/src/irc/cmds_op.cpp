@@ -18,6 +18,7 @@
 #include "../irc/NumericReplies.hpp"
 #include <cstdlib>
 #include <cstdio>
+#include <cctype>
 
 void Server::cmdKick(ClientConnection* client, const Message& msg)
 {
@@ -184,24 +185,57 @@ void Server::cmdMode(ClientConnection* client, const Message& msg)
             if (action == '+') {
                 if (paramIdx >= msg.params.size()) continue;
                 std::string key = msg.params[paramIdx++];
+                
+                // [FIX] Validar que la clave no tenga espacios (RFC)
+                if (key.find(' ') != std::string::npos) continue;
+
                 channel->setKey(key);
                 channel->broadcast(":" + client->getUser()->getPrefix() + " MODE " + target + " " + action + "k " + key + "\r\n", NULL);
             } else {
-                channel->setKey(""); 
-                channel->broadcast(":" + client->getUser()->getPrefix() + " MODE " + target + " " + action + "k" + "\r\n", NULL);
+                // [FIX RFC] Para quitar la clave (-k), se debe proporcionar la clave actual correcta
+                if (paramIdx >= msg.params.size()) {
+                    sendError(client, ERR_NEEDMOREPARAMS, "MODE"); // O simplemente ignorar
+                    continue;
+                }
+                std::string keyParam = msg.params[paramIdx++];
+
+                // Verificamos si la clave coincide
+                if (channel->getKey() == keyParam) {
+                    channel->setKey(""); 
+                    channel->broadcast(":" + client->getUser()->getPrefix() + " MODE " + target + " " + action + "k *\r\n", NULL);
+                } else {
+                    sendError(client, ERR_BADCHANNELKEY, channel->getName());
+                }
             }
         }
         // l: Limit
         else if (mode == 'l') {
             if (action == '+') {
                 if (paramIdx >= msg.params.size()) continue;
-                int limit = std::atoi(msg.params[paramIdx++].c_str());
+                std::string limitStr = msg.params[paramIdx++];
+                
+                // [FIX SEGURIDAD] Validar que sea numérico antes de atoi
+                bool isNumeric = true;
+                for (size_t j = 0; j < limitStr.length(); ++j) {
+                    if (!std::isdigit(limitStr[j])) {
+                        isNumeric = false;
+                        break;
+                    }
+                }
+                
+                // Si no es número o es negativo, ignoramos
+                if (!isNumeric) continue;
+                
+                int limit = std::atoi(limitStr.c_str());
+                // Un límite de 0 o negativo no tiene sentido en este contexto
+                if (limit <= 0) continue; 
+
                 channel->setLimit(limit);
                 char buff[20];
                 std::sprintf(buff, "%d", limit);
                 channel->broadcast(":" + client->getUser()->getPrefix() + " MODE " + target + " " + action + "l " + std::string(buff) + "\r\n", NULL);
             } else {
-                channel->setLimit(0);
+                channel->setLimit(0); // 0 significa sin límite
                 channel->broadcast(":" + client->getUser()->getPrefix() + " MODE " + target + " " + action + "l" + "\r\n", NULL);
             }
         }

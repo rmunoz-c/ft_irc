@@ -1,60 +1,100 @@
-/* ************************************************************************** */
-/*                                                                            */
-/*                                                        :::      ::::::::   */
-/*   Channel.hpp                                        :+:      :+:    :+:   */
-/*                                                    +:+ +:+         +:+     */
-/*   By: carlsanc <carlsanc@student.42madrid>       +#+  +:+       +#+        */
-/*                                                +#+#+#+#+#+   +#+           */
-/*   Created: 2025/12/09 14:41:54 by miaviles          #+#    #+#             */
-/*   Updated: 2025/12/10 20:08:33 by carlsanc         ###   ########.fr       */
-/*                                                                            */
-/* ************************************************************************** */
-
-📋 Esquema Channel.hpp/cpp para tu Compañero
-
-📄 channel/Channel.hpp
-cpp/* ************************************************************************** */
-/*                                                                            */
-/*                                                        :::      ::::::::   */
-/*   Channel.hpp                                        :+:      :+:    :+:   */
-/*                                                    +:+ +:+         +:+     */
-/*   By: your_login <your_login@student.42.fr>      +#+  +:+       +#+        */
-/*                                                +#+#+#+#+#+   +#+           */
-/*   Created: 2025/12/09 15:00:00 by your_login        #+#    #+#             */
-/*   Updated: 2025/12/09 15:00:00 by your_login        ###   ########.fr       */
-/*                                                                            */
-/* ************************************************************************** */
-
 #ifndef CHANNEL_HPP
 #define CHANNEL_HPP
 
 #include <string>
 #include <vector>
 #include <set>
+#include <algorithm>
 
+// Forward declaration para evitar dependencias circulares
 class User;
-
-/**
- * Channel: IRC Channel management
- * 
- * Responsibilities:
- * - Member management (users in channel)
- * - Operator privileges
- * - Channel modes (invite-only, topic-restricted, key, limit)
- * - Topic management
- * - Message broadcasting to all members
- * 
- * Channel modes to implement (42 subject):
- * - i: Invite-only
- * - t: Topic restricted to operators
- * - k: Channel key (password)
- * - o: Operator privilege
- * - l: User limit
- */
 
 class Channel
 {
+    public:
+        // Constructor y Destructor
+        Channel(const std::string& name);
+        ~Channel();
 
+        // ------------------------------------------------------------------
+        // GETTERS BÁSICOS
+        // ------------------------------------------------------------------
+        const std::string& getName() const;
+        const std::string& getTopic() const;
+        const std::string& getKey() const;
+        
+        // Límites y Conteo
+        size_t getUserCount() const;
+        int    getLimit() const;
+        
+        // ------------------------------------------------------------------
+        // MODOS DEL CANAL (+i, +t, +k, +l)
+        // ------------------------------------------------------------------
+        std::string getModes() const;           // Devuelve string tipo "+itk" para RPL_CHANNELMODEIS
+        bool        hasMode(char mode) const;
+        void        setMode(char mode, bool active);
+        
+        void        setKey(const std::string& key);
+        void        setLimit(int limit);
+        void        setTopic(const std::string& topic);
+
+        // ------------------------------------------------------------------
+        // GESTIÓN DE MIEMBROS
+        // ------------------------------------------------------------------
+        void    addMember(User* user);
+        void    removeMember(User* user);
+        bool    isMember(User* user) const;
+        User* getMember(const std::string& nick) const;
+
+        /**
+         * [IMPORTANTE] NECESARIO PARA EL COMANDO NICK (Evitar Spam)
+         * Devuelve la lista completa de usuarios para poder iterar y filtrar
+         * a quién enviamos notificaciones globales.
+         * Que nadie toque esto >:(
+         */
+        const std::vector<User*>& getMembers() const;
+
+        // ------------------------------------------------------------------
+        // GESTIÓN DE OPERADORES (+o)
+        // ------------------------------------------------------------------
+        void    addOperator(User* user);
+        void    removeOperator(User* user);
+        bool    isOperator(User* user) const;
+
+        // ------------------------------------------------------------------
+        // GESTIÓN DE INVITACIONES (+i)
+        // ------------------------------------------------------------------
+        void    addInvite(const std::string& nick);
+        bool    isInvited(User* user) const; // Verifica si el usuario está en la lista blanca
+
+        // ------------------------------------------------------------------
+        // COMUNICACIÓN
+        // ------------------------------------------------------------------
+        // Enviar mensaje a todos en el canal, excepto 'excludeUser' (opcional)
+        void    broadcast(const std::string& msg, User* excludeUser);
+        
+        // Genera la lista de nombres para RPL_NAMREPLY (ej: "@Admin +User1 User2")
+        std::string getNamesList() const;
+
+    private:
+        std::string _name;
+        std::string _topic;
+        std::string _key;       // Contraseña del canal (+k)
+        int         _limit;     // Límite de usuarios (+l), 0 = sin límite
+
+        // Flags de modos booleanos
+        bool _inviteOnly;       // +i
+        bool _topicOpOnly;      // +t
+        bool _hasKey;           // +k activado
+        bool _hasLimit;         // +l activado
+
+        // Listas internas
+        std::vector<User*>    _members;   // Todos los usuarios dentro
+        std::vector<User*>    _operators; // Subconjunto de usuarios que son OP
+        std::set<std::string> _invites;   // Nicks invitados (whitelist para +i)
+
+        // Constructor privado para prohibir canales sin nombre
+        Channel(); 
 };
 
 #endif

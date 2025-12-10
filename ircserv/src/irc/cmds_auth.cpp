@@ -16,6 +16,7 @@
 #include "../channel/Channel.hpp"
 #include "CommandHelpers.hpp"
 #include "../irc/NumericReplies.hpp"
+#include <set> // Necesario para evitar spam en NICK
 
 void Server::cmdPass(ClientConnection* client, const Message& msg)
 {
@@ -46,7 +47,7 @@ void Server::cmdNick(ClientConnection* client, const Message& msg)
     if (newNick.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789[]{}\\|-_^") != std::string::npos)
         return sendError(client, ERR_ERRONEUSNICKNAME, newNick);
 
-    // Verificar si ya existe
+    // Verificar si ya existe el nickname en el servidor
     for (size_t i = 0; i < clients_.size(); ++i)
     {
         if (clients_[i] != client && clients_[i]->getUser() && clients_[i]->getUser()->getNickname() == newNick)
@@ -59,17 +60,35 @@ void Server::cmdNick(ClientConnection* client, const Message& msg)
         std::string oldPrefix = client->getUser()->getPrefix();
         std::string notification = ":" + oldPrefix + " NICK :" + newNick + "\r\n";
         
+        // 1. Enviarse la confirmación a uno mismo
         client->queueSend(notification);
         
+        // 2. Enviar a los demás usuarios que comparten canal (SIN SPAM)
+        // Usamos un std::set para asegurar que cada usuario reciba el mensaje solo una vez,
+        // incluso si comparte múltiples canales con quien cambia de nick.
+        std::set<ClientConnection*> uniqueRecipients;
         const std::vector<Channel*>& channels = client->getUser()->getChannels();
+        
         for (size_t i = 0; i < channels.size(); ++i)
         {
-            // Pasar 'client->getUser()' como excepción para no enviárselo dos veces si broadcast lo maneja
-            // Pero NICK es especial, mejor que todos lo reciban.
-            channels[i]->broadcast(notification, NULL); 
+            // Nota: Asegúrate de que Channel tenga el método getMembers()
+            const std::vector<User*>& members = channels[i]->getMembers();
+            for (size_t j = 0; j < members.size(); ++j) 
+            {
+                if (members[j]->getConnection() != client) { // No reenviar a mí mismo
+                    uniqueRecipients.insert(members[j]->getConnection());
+                }
+            }
+        }
+
+        // Broadcast a la lista de destinatarios únicos
+        for (std::set<ClientConnection*>::iterator it = uniqueRecipients.begin(); it != uniqueRecipients.end(); ++it)
+        {
+            (*it)->queueSend(notification);
         }
     }
 
+    // Aplicar el cambio
     client->getUser()->setNickname(newNick);
     checkRegistration(client);
 }
@@ -92,7 +111,10 @@ void Server::cmdUser(ClientConnection* client, const Message& msg)
 void Server::cmdQuit(ClientConnection* client, const Message& msg)
 {
     std::string reason = (msg.params.empty()) ? "Client Quit" : msg.params[0];
-    // La desconexión real sucede en el bucle principal cuando detecta el flag closed
+    
+    // La lógica de desconexión y limpieza de canales se maneja en el bucle principal (Server::run)
+    // al detectar que la conexión está cerrada.
+    // Solo marcamos para cerrar.
     (void)reason; 
     client->closeConnection();
 }
@@ -109,5 +131,6 @@ void Server::cmdPing(ClientConnection* client, const Message& msg)
 void Server::cmdPong(ClientConnection* client, const Message& msg)
 {
     (void)msg;
+    // Solo sirve para mantener viva la conexión, actualiza el timestamp de actividad
     client->updateActivity();
 }
